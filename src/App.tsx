@@ -327,7 +327,7 @@ export default function App() {
     try {
       const cleanId = extractSpreadsheetId(targetSpreadsheetId);
       const names = await fetchListSheetProductNames(cleanId, token);
-      if (names && names.length >= 6) {
+      if (names && names.length > 0) {
         setListProductNames(names);
         localStorage.setItem('sheet_list_product_names', JSON.stringify(names));
       }

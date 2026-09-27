@@ -4105,7 +4105,11 @@ export const fetchListSheetProductNames = async (
           names.push(val);
         }
         if (names.length >= 1) {
-          return names.slice(0, 6);
+          const finalNames = names.slice(0, 6);
+          try {
+            localStorage.setItem('sheet_list_product_names', JSON.stringify(finalNames));
+          } catch (e) {}
+          return finalNames;
         }
       }
     } catch (e) {
@@ -4114,40 +4118,53 @@ export const fetchListSheetProductNames = async (
   }
 
   // 2. Fetch via gviz endpoint (public or published) with cache-busting timestamp
-  const gvizUrl = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(targetTab)}&_t=${Date.now()}`;
-  try {
-    const res = await fetch(gvizUrl, { cache: 'no-store' });
-    if (res.ok) {
-      const text = await res.text();
-      const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);/);
-      if (match && match[1]) {
-        const data = JSON.parse(match[1]);
-        if (data.table && data.table.rows && Array.isArray(data.table.rows)) {
-          const names: string[] = [];
-          data.table.rows.forEach((rowObj: any, idx: number) => {
-            const c = rowObj.c || [];
-            // Column B is index 1
-            const cellVal =
-              c[1]?.v !== null && c[1]?.v !== undefined
-                ? String(c[1]?.v).trim()
-                : c[1]?.f
-                ? String(c[1]?.f).trim()
-                : '';
-            if (!cellVal) return;
-            // Skip header if on row 0 and contains "update name" or "name"
-            if (idx === 0 && /update\s*name|product\s*name|header/i.test(cellVal)) {
-              return;
+  // First try direct range B1:B15 for List sheet Column B
+  const gvizUrls = [
+    `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(targetTab)}&range=B1:B15&_t=${Date.now()}`,
+    `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(targetTab)}&_t=${Date.now()}`,
+  ];
+
+  for (const gvizUrl of gvizUrls) {
+    try {
+      const res = await fetch(gvizUrl, { cache: 'no-store' });
+      if (res.ok) {
+        const text = await res.text();
+        const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);/);
+        if (match && match[1]) {
+          const data = JSON.parse(match[1]);
+          if (data.table && data.table.rows && Array.isArray(data.table.rows)) {
+            const names: string[] = [];
+            data.table.rows.forEach((rowObj: any, idx: number) => {
+              const c = rowObj.c || [];
+              // If only column B was requested (range=B1:B15), cell is in c[0]
+              // If entire table was returned, Column B is in c[1]
+              const targetCell = c.length === 1 ? c[0] : (c[1] !== null && c[1] !== undefined ? c[1] : c[0]);
+              const cellVal =
+                targetCell?.v !== null && targetCell?.v !== undefined
+                  ? String(targetCell.v).trim()
+                  : targetCell?.f
+                  ? String(targetCell.f).trim()
+                  : '';
+              if (!cellVal) return;
+              // Skip header if on row 0 and contains "update name" or "header"
+              if (idx === 0 && /update\s*name|header/i.test(cellVal)) {
+                return;
+              }
+              names.push(cellVal);
+            });
+            if (names.length >= 1) {
+              const finalNames = names.slice(0, 6);
+              try {
+                localStorage.setItem('sheet_list_product_names', JSON.stringify(finalNames));
+              } catch (e) {}
+              return finalNames;
             }
-            names.push(cellVal);
-          });
-          if (names.length >= 1) {
-            return names.slice(0, 6);
           }
         }
       }
+    } catch (err) {
+      console.warn('Failed to fetch List sheet via gviz url:', gvizUrl, err);
     }
-  } catch (err) {
-    console.warn('Failed to fetch List sheet via gviz:', err);
   }
 
   // Fallback to default 6 products matching List sheet structure

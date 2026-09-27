@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Package,
   RefreshCw,
@@ -62,6 +62,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   listProductNames,
 }) => {
   // Real-time 6 Product names loaded from 'List' Sheet Column B
+  // Dynamic 6 product names strictly from List sheet Column B
   const [dynamicProductNames, setDynamicProductNames] = useState<string[]>(() => {
     if (listProductNames && listProductNames.length >= 6) return listProductNames;
     try {
@@ -72,12 +73,12 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
       }
     } catch (e) {}
     return [
-      'Rose 599',
-      'Watch 599',
-      'Cutting Dispancer',
-      'Porbash Rose 990',
-      'Porbash Rose 1350',
+      'Rose 599tk',
+      'Watch 599tk',
       'Doll and toys',
+      'Cutting Dispancer',
+      'Porbash Rose 990tk',
+      'Porbash Rose 1350tk',
     ];
   });
   const [isLoadingListNames, setIsLoadingListNames] = useState<boolean>(false);
@@ -168,7 +169,9 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
       const names = await fetchListSheetProductNames(spreadsheetId, accessToken);
       if (names && names.length > 0) {
         setDynamicProductNames(names);
-        localStorage.setItem('sheet_list_product_names', JSON.stringify(names));
+        try {
+          localStorage.setItem('sheet_list_product_names', JSON.stringify(names));
+        } catch (e) {}
       }
     } catch (err) {
       console.warn('Failed to load List product names:', err);
@@ -188,6 +191,126 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
       loadListNames();
     }
   }, [isSyncing, loadListNames]);
+
+  // Auto-refresh when user switches back to this browser tab (e.g. after editing Google Sheets)
+  useEffect(() => {
+    const handleFocus = () => {
+      loadListNames();
+      loadDirectStock();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [loadListNames, loadDirectStock]);
+
+  // Periodic background refresh every 20 seconds
+  useEffect(() => {
+    const timer = setInterval(() => {
+      loadListNames();
+      loadDirectStock();
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [loadListNames, loadDirectStock]);
+
+  // The 6 product cards: Exactly reading names from 'List' sheet Column B, and stock from Sheet 3
+  const displayProductCards = useMemo(() => {
+    const fallbackNames = [
+      'Rose 599tk',
+      'Watch 599tk',
+      'Doll and toys',
+      'Cutting Dispancer',
+      'Porbash Rose 990tk',
+      'Porbash Rose 1350tk',
+    ];
+
+    // Default cell mapping for List sheet Column B Row 1..6:
+    // Row 1: Product 1 (Rose 599tk) -> Cell A3
+    // Row 2: Product 2 (Watch 599tk) -> Cell B3
+    // Row 3: Product 3 (Doll and toys) -> Cell F3
+    // Row 4: Product 4 (Cutting Dispancer) -> Cell C3
+    // Row 5: Product 5 (Porbash Rose 990tk) -> Cell D3
+    // Row 6: Product 6 (Porbash Rose 1350tk) -> Cell E3
+    const cellMapByIndex = ['A3', 'B3', 'F3', 'C3', 'D3', 'E3'];
+
+    return [0, 1, 2, 3, 4, 5].map((idx) => {
+      // 1. Dynamic product name directly from 'List' sheet Column B (Row idx + 1)
+      const name = (dynamicProductNames && dynamicProductNames[idx]) || fallbackNames[idx];
+      const norm = name.toLowerCase().trim();
+
+      // 2. Identify the cell letter from Sheet3 (A3..F3)
+      let targetCell = cellMapByIndex[idx];
+
+      // Smart keyword match if user rearranges rows in List sheet
+      if (norm.includes('cutting') || norm.includes('dispancer')) {
+        targetCell = 'C3';
+      } else if (norm.includes('doll') || norm.includes('toy')) {
+        targetCell = 'F3';
+      } else if (norm.includes('1350')) {
+        targetCell = 'E3';
+      } else if (norm.includes('990')) {
+        targetCell = 'D3';
+      } else if (norm.includes('watch') || norm.includes('ঘড়ি') || norm.includes('golden')) {
+        targetCell = 'B3';
+      } else if (norm.includes('rose') || norm.includes('599')) {
+        targetCell = 'A3';
+      }
+
+      // 3. Get the real-time stock from Sheet 3 (A3..F3)
+      const foundBox = sheet3StockBoxes.find(
+        (b) => b.cell.toUpperCase() === targetCell.toUpperCase() || b.colLetter.toUpperCase() === targetCell[0].toUpperCase()
+      );
+      const stock = foundBox ? foundBox.stock : 0;
+
+      return {
+        name,
+        cell: targetCell,
+        stock,
+      };
+    });
+  }, [dynamicProductNames, sheet3StockBoxes]);
+
+  /**
+   * Links each product name from List Sheet Column B to corresponding Sheet 3 stock cell (A3..F3)
+   */
+  const getStockForListName = useCallback(
+    (name: string, index: number): { cell: string; stock: number } => {
+      if (!name) return { cell: 'A3', stock: 0 };
+      const norm = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // 1. Try keyword matching against Sheet 3 cell labels
+      const match = sheet3StockBoxes.find((c) => {
+        const cNorm = (c.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (!cNorm) return false;
+        if (cNorm === norm || cNorm.includes(norm) || norm.includes(cNorm)) return true;
+        if (norm.includes('rose') && norm.includes('599') && cNorm.includes('599')) return true;
+        if (norm.includes('watch') && cNorm.includes('watch')) return true;
+        if ((norm.includes('doll') || norm.includes('toy')) && (cNorm.includes('doll') || cNorm.includes('toy'))) return true;
+        if ((norm.includes('cutting') || norm.includes('disp')) && (cNorm.includes('cutt') || cNorm.includes('disp'))) return true;
+        if (norm.includes('990') && cNorm.includes('990')) return true;
+        if (norm.includes('1350') && cNorm.includes('1350')) return true;
+        return false;
+      });
+
+      if (match) {
+        return { cell: match.cell, stock: match.stock };
+      }
+
+      // 2. Default 1-to-1 List Sheet Row mapping to Sheet 3 cells:
+      // Row 1 (Product 1) -> A3
+      // Row 2 (Product 2) -> B3
+      // Row 3 (Product 3) -> F3 (Doll and toys)
+      // Row 4 (Product 4) -> C3 (Cutting Dispancer)
+      // Row 5 (Product 5) -> D3 (Porbash Rose 990tk)
+      // Row 6 (Product 6) -> E3 (Porbash Rose 1350tk)
+      const fallbackCellMap = ['A3', 'B3', 'F3', 'C3', 'D3', 'E3'];
+      const targetCell = fallbackCellMap[index] || 'A3';
+      const byCell = sheet3StockBoxes.find((c) => c.cell === targetCell);
+      return {
+        cell: targetCell,
+        stock: byCell !== undefined ? byCell.stock : 0,
+      };
+    },
+    [sheet3StockBoxes]
+  );
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-fadeIn pb-20 sm:pb-12">
@@ -219,7 +342,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
         <div className="flex items-center gap-2">
           <Boxes className="w-4 h-4 text-pink-400" />
           <span className="text-xs sm:text-sm font-bold text-white">
-            পণ্য স্টক কার্ড (Sheet 3: A3, B3, C3, D3, E3, F3 লাইভ স্টক)
+            পণ্য স্টক কার্ড (List শিট Col B নাম ও Sheet 3 লাইভ স্টক)
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -228,31 +351,35 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
               loadDirectStock();
               loadListNames();
             }}
-            disabled={isLoadingStockBoxes}
+            disabled={isLoadingStockBoxes || isLoadingListNames}
             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#141824] hover:bg-[#1e2436] border border-[#232b3e] text-[10px] sm:text-[11px] text-gray-300 hover:text-pink-300 transition-colors font-siliguri cursor-pointer active:scale-95"
-            title="Sheet 3 এর A3..F3 লাইভ স্টক রিফ্রেশ করুন"
+            title="List শিটের নাম ও Sheet 3 এর লাইভ স্টক রিফ্রেশ করুন"
           >
-            <RefreshCw className={`w-3 h-3 text-pink-400 ${isLoadingStockBoxes ? 'animate-spin' : ''}`} />
-            <span>স্টক রিফ্রেশ</span>
+            <RefreshCw
+              className={`w-3 h-3 text-pink-400 ${
+                isLoadingStockBoxes || isLoadingListNames ? 'animate-spin' : ''
+              }`}
+            />
+            <span>স্টক ও নাম রিফ্রেশ</span>
           </button>
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold font-mono">
-              Sheet 3 (A3..F3) Live
+              List (Col B) &amp; Sheet 3 Live
             </span>
           </div>
         </div>
       </div>
 
-      {/* Exactly 6 Product Stock Cards (Pure Display, Sheet 3: A3, B3, C3, D3, E3, F3) */}
+      {/* Exactly 6 Product Stock Cards - Names strictly from List Sheet Column B */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
-        {sheet3StockBoxes.map((box, idx) => {
-          const isLowStock = box.stock > 0 && box.stock <= 5;
-          const isOutOfStock = box.stock <= 0;
+        {displayProductCards.map((card, idx) => {
+          const isLowStock = card.stock > 0 && card.stock <= 5;
+          const isOutOfStock = card.stock <= 0;
 
           return (
             <div
-              key={`dash-box-${box.cell}-${idx}`}
+              key={`dash-card-${card.cell}-${idx}-${card.name}`}
               className={`bg-[#12151f] border rounded-2xl p-3 sm:p-3.5 relative overflow-hidden group transition-all flex flex-col justify-between ${
                 isOutOfStock
                   ? 'border-rose-500/40 hover:border-rose-500/70'
@@ -265,9 +392,9 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
                 <div className="flex items-start justify-between gap-1">
                   <span
                     className="text-xs font-bold text-white tracking-tight line-clamp-1 group-hover:text-pink-300 transition-colors flex-1"
-                    title={box.name}
+                    title={card.name}
                   >
-                    {box.name}
+                    {card.name}
                   </span>
                   <div className="w-6 h-6 rounded-lg bg-pink-500/10 border border-pink-500/20 flex items-center justify-center text-pink-400 shrink-0">
                     <Package className="w-3.5 h-3.5" />
@@ -285,7 +412,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
                           : 'text-pink-500'
                       }
                     >
-                      {box.stock}
+                      {card.stock}
                     </span>
                     <span className="text-xs sm:text-sm font-bold text-gray-300">পিস</span>
                   </div>
@@ -310,7 +437,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
                       </span>
                     </p>
                     <span className="text-[9px] font-mono text-pink-400 font-bold bg-pink-500/10 px-1.5 py-0.5 rounded border border-pink-500/20">
-                      {box.cell}
+                      {card.cell}
                     </span>
                   </div>
                 </div>
