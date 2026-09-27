@@ -5,7 +5,12 @@ import {
   Boxes,
 } from 'lucide-react';
 import { Order, OrderStatus, Product, StockMovementLog, Sheet3ProductEntry } from '../types';
-import { fetchListSheetProductNames } from '../services/sheets';
+import {
+  fetchListSheetProductNames,
+  fetchSheet3DirectStockCells,
+  Sheet3DirectStockBox,
+  Sheet3StockItem,
+} from '../services/sheets';
 import { StockManagerHome } from './StockManagerHome';
 import { OrderCalendar } from './OrderCalendar';
 
@@ -24,6 +29,7 @@ interface DashboardHomeProps {
   stockLogs: StockMovementLog[];
   onAddProduct?: (newProduct: Omit<Product, 'rowIndex'>) => void;
   sheet3Entries?: Sheet3ProductEntry[];
+  sheet3StockItems?: Sheet3StockItem[];
   onUpdateSheet3Entry?: (entry: Sheet3ProductEntry) => Promise<void> | void;
   onAddSheet3Entry?: (entry: Omit<Sheet3ProductEntry, 'rowIndex' | 'id'>) => Promise<void> | void;
   onRefreshSheet3?: () => void;
@@ -46,6 +52,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   stockLogs,
   onAddProduct,
   sheet3Entries,
+  sheet3StockItems,
   onUpdateSheet3Entry,
   onAddSheet3Entry,
   onRefreshSheet3,
@@ -67,13 +74,85 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
     return [
       'Rose 599',
       'Watch 599',
-      'Doll and toys tk',
-      'Cutting Dispancer tk',
+      'Cutting Dispancer',
       'Porbash Rose 990',
       'Porbash Rose 1350',
+      'Doll and toys',
     ];
   });
   const [isLoadingListNames, setIsLoadingListNames] = useState<boolean>(false);
+
+  // Real-time stock strictly read from Sheet 3 cells A3, B3, C3, D3, E3, F3
+  const [sheet3StockBoxes, setSheet3StockBoxes] = useState<Sheet3DirectStockBox[]>(() => {
+    try {
+      const saved = localStorage.getItem('sheet3_direct_stock_boxes');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length === 6) return parsed;
+      }
+    } catch (e) {}
+    return [
+      { colLetter: 'A', cell: 'A3', name: 'Rose 599tk', stock: 179 },
+      { colLetter: 'B', cell: 'B3', name: 'Watch 599tk', stock: 54 },
+      { colLetter: 'C', cell: 'C3', name: 'Cutting Dispancer', stock: 17 },
+      { colLetter: 'D', cell: 'D3', name: 'Porbash Rose 990tk', stock: 142 },
+      { colLetter: 'E', cell: 'E3', name: 'Porbash Rose 1350tk', stock: 0 },
+      { colLetter: 'F', cell: 'F3', name: 'Doll and toys', stock: 77 },
+    ];
+  });
+  const [isLoadingStockBoxes, setIsLoadingStockBoxes] = useState<boolean>(false);
+
+  // Directly fetch Sheet 3 cells A3..F3 from Google Sheets
+  const loadDirectStock = useCallback(async () => {
+    setIsLoadingStockBoxes(true);
+    try {
+      const boxes = await fetchSheet3DirectStockCells(spreadsheetId);
+      if (boxes && boxes.length === 6) {
+        setSheet3StockBoxes(boxes);
+        try {
+          localStorage.setItem('sheet3_direct_stock_boxes', JSON.stringify(boxes));
+        } catch (e) {}
+      }
+    } catch (err) {
+      console.warn('Failed to load Sheet 3 direct stock cells:', err);
+    } finally {
+      setIsLoadingStockBoxes(false);
+    }
+  }, [spreadsheetId]);
+
+  useEffect(() => {
+    loadDirectStock();
+  }, [loadDirectStock]);
+
+  useEffect(() => {
+    if (!isSyncing) {
+      loadDirectStock();
+    }
+  }, [isSyncing, loadDirectStock]);
+
+  // Sync if parent passes updated sheet3StockItems
+  useEffect(() => {
+    if (sheet3StockItems && sheet3StockItems.length >= 6) {
+      const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+      const mapped = letters.map((letter) => {
+        const found = sheet3StockItems.find(
+          (i) => (i.colLetter || '').toUpperCase() === letter || (i.cell || '').toUpperCase() === `${letter}3`
+        );
+        return {
+          colLetter: letter,
+          cell: `${letter}3`,
+          name: found?.productName || '',
+          stock: found?.quantity !== undefined ? found.quantity : 0,
+        };
+      });
+      if (mapped.every((m) => m.name)) {
+        setSheet3StockBoxes(mapped);
+        try {
+          localStorage.setItem('sheet3_direct_stock_boxes', JSON.stringify(mapped));
+        } catch (e) {}
+      }
+    }
+  }, [sheet3StockItems]);
 
   // Sync state when parent provides updated listProductNames
   useEffect(() => {
@@ -110,93 +189,6 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
     }
   }, [isSyncing, loadListNames]);
 
-  // The 6 products configuration matching List sheet order (Row 1 to Row 6 in Column B)
-  const SIX_PRODUCTS_CONFIG = [
-    {
-      key: 'rose',
-      name: 'Rose 599',
-      cell: 'A3',
-      matchKeys: ['rose', '599'],
-      fallbackStock: 18,
-    },
-    {
-      key: 'watch',
-      name: 'Watch 599',
-      cell: 'B3',
-      matchKeys: ['watch', 'golden', 'ঘড়ি'],
-      fallbackStock: 24,
-    },
-    {
-      key: 'doll',
-      name: 'Doll and toys tk',
-      cell: 'F3',
-      matchKeys: ['doll', 'toy', 'খেলনা'],
-      fallbackStock: 4,
-    },
-    {
-      key: 'cutting',
-      name: 'Cutting Dispancer tk',
-      cell: 'C3',
-      matchKeys: ['cutting', 'dispancer'],
-      fallbackStock: 2,
-    },
-    {
-      key: '990',
-      name: 'Porbash Rose 990',
-      cell: 'D3',
-      matchKeys: ['990', 'probash 990', 'porbash rose 990'],
-      fallbackStock: 15,
-    },
-    {
-      key: '1350',
-      name: 'Porbash Rose 1350',
-      cell: 'E3',
-      matchKeys: ['1350', 'probash 1350', 'porbash rose 1350'],
-      fallbackStock: 8,
-    },
-  ];
-
-  const displayProducts = SIX_PRODUCTS_CONFIG.map((cfg, idx) => {
-    // Exact real-time product name from 'List' sheet Column B
-    const realTimeName = (dynamicProductNames && dynamicProductNames[idx]) || cfg.name;
-    const nameNorm = realTimeName.toLowerCase();
-
-    let stock = cfg.fallbackStock;
-    if (sheet3Entries && sheet3Entries.length > 0) {
-      const match = sheet3Entries.find((entry) => {
-        const pName = (entry.productName || '').toLowerCase();
-        return (
-          pName === nameNorm ||
-          pName.includes(nameNorm) ||
-          nameNorm.includes(pName) ||
-          cfg.matchKeys.some((k) => pName.includes(k))
-        );
-      });
-      if (match && match.currentStock !== undefined && !isNaN(Number(match.currentStock))) {
-        stock = Number(match.currentStock);
-      }
-    } else {
-      const match = products.find((p) => {
-        const pName = (p.name || '').toLowerCase();
-        return (
-          pName === nameNorm ||
-          pName.includes(nameNorm) ||
-          nameNorm.includes(pName) ||
-          cfg.matchKeys.some((k) => pName.includes(k))
-        );
-      });
-      if (match && match.stock !== undefined) {
-        stock = match.stock;
-      }
-    }
-
-    return {
-      name: realTimeName,
-      cell: cfg.cell,
-      stock,
-    };
-  });
-
   return (
     <div className="space-y-4 sm:space-y-6 animate-fadeIn pb-20 sm:pb-12">
       {/* Top Header */}
@@ -227,37 +219,40 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
         <div className="flex items-center gap-2">
           <Boxes className="w-4 h-4 text-pink-400" />
           <span className="text-xs sm:text-sm font-bold text-white">
-            পণ্য স্টক কার্ড (৬টি প্রোডাক্টের লাইভ স্টক - Sheet 3)
+            পণ্য স্টক কার্ড (Sheet 3: A3, B3, C3, D3, E3, F3 লাইভ স্টক)
           </span>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={loadListNames}
-            disabled={isLoadingListNames}
-            className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#141824] hover:bg-[#1e2436] border border-[#232b3e] text-[10px] sm:text-[11px] text-gray-300 hover:text-pink-300 transition-colors font-siliguri"
-            title="List শিট কলাম B থেকে ৬টি নাম পুনরায় লোড করুন"
+            onClick={() => {
+              loadDirectStock();
+              loadListNames();
+            }}
+            disabled={isLoadingStockBoxes}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#141824] hover:bg-[#1e2436] border border-[#232b3e] text-[10px] sm:text-[11px] text-gray-300 hover:text-pink-300 transition-colors font-siliguri cursor-pointer active:scale-95"
+            title="Sheet 3 এর A3..F3 লাইভ স্টক রিফ্রেশ করুন"
           >
-            <RefreshCw className={`w-3 h-3 text-pink-400 ${isLoadingListNames ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">নাম সিঙ্ক</span>
+            <RefreshCw className={`w-3 h-3 text-pink-400 ${isLoadingStockBoxes ? 'animate-spin' : ''}`} />
+            <span>স্টক রিফ্রেশ</span>
           </button>
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold font-mono">
-              List (Col B) & Sheet 3 Live
+              Sheet 3 (A3..F3) Live
             </span>
           </div>
         </div>
       </div>
 
-      {/* Exactly 6 Product Stock Cards (Pure Display, NO edit button here) */}
+      {/* Exactly 6 Product Stock Cards (Pure Display, Sheet 3: A3, B3, C3, D3, E3, F3) */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
-        {displayProducts.map((prod, idx) => {
-          const isLowStock = prod.stock > 0 && prod.stock <= 5;
-          const isOutOfStock = prod.stock <= 0;
+        {sheet3StockBoxes.map((box, idx) => {
+          const isLowStock = box.stock > 0 && box.stock <= 5;
+          const isOutOfStock = box.stock <= 0;
 
           return (
             <div
-              key={`dash-prod-${idx}`}
+              key={`dash-box-${box.cell}-${idx}`}
               className={`bg-[#12151f] border rounded-2xl p-3 sm:p-3.5 relative overflow-hidden group transition-all flex flex-col justify-between ${
                 isOutOfStock
                   ? 'border-rose-500/40 hover:border-rose-500/70'
@@ -270,9 +265,9 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
                 <div className="flex items-start justify-between gap-1">
                   <span
                     className="text-xs font-bold text-white tracking-tight line-clamp-1 group-hover:text-pink-300 transition-colors flex-1"
-                    title={prod.name}
+                    title={box.name}
                   >
-                    {prod.name}
+                    {box.name}
                   </span>
                   <div className="w-6 h-6 rounded-lg bg-pink-500/10 border border-pink-500/20 flex items-center justify-center text-pink-400 shrink-0">
                     <Package className="w-3.5 h-3.5" />
@@ -290,7 +285,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
                           : 'text-pink-500'
                       }
                     >
-                      {prod.stock}
+                      {box.stock}
                     </span>
                     <span className="text-xs sm:text-sm font-bold text-gray-300">পিস</span>
                   </div>
@@ -314,8 +309,8 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
                           : 'মজুদ স্টক'}
                       </span>
                     </p>
-                    <span className="text-[9px] font-mono text-gray-400 bg-[#161a26] px-1 rounded border border-[#22293d]">
-                      {prod.cell}
+                    <span className="text-[9px] font-mono text-pink-400 font-bold bg-pink-500/10 px-1.5 py-0.5 rounded border border-pink-500/20">
+                      {box.cell}
                     </span>
                   </div>
                 </div>

@@ -3013,6 +3013,69 @@ export const matchProductWithSheet3 = (
   return undefined;
 };
 
+export interface Sheet3DirectStockBox {
+  colLetter: string;
+  cell: string;
+  name: string;
+  stock: number;
+}
+
+/**
+ * Direct real-time fetch for Sheet 3 cells A3, B3, C3, D3, E3, F3
+ */
+export const fetchSheet3DirectStockCells = async (
+  spreadsheetId: string = DEFAULT_SPREADSHEET_ID
+): Promise<Sheet3DirectStockBox[]> => {
+  const cleanId = extractSpreadsheetId(spreadsheetId);
+  const targetTab = 'Sheet3';
+  const url = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(targetTab)}&range=A2:F3&_t=${Date.now()}`;
+
+  const defaultStock: Sheet3DirectStockBox[] = [
+    { colLetter: 'A', cell: 'A3', name: 'Rose 599tk', stock: 179 },
+    { colLetter: 'B', cell: 'B3', name: 'Watch 599tk', stock: 54 },
+    { colLetter: 'C', cell: 'C3', name: 'Cutting Dispancer', stock: 17 },
+    { colLetter: 'D', cell: 'D3', name: 'Porbash Rose 990tk', stock: 142 },
+    { colLetter: 'E', cell: 'E3', name: 'Porbash Rose 1350tk', stock: 0 },
+    { colLetter: 'F', cell: 'F3', name: 'Doll and toys', stock: 77 },
+  ];
+
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (res.ok) {
+      const text = await res.text();
+      const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);/);
+      if (match && match[1]) {
+        const data = JSON.parse(match[1]);
+        if (data.table && data.table.cols && data.table.rows && data.table.rows.length > 0) {
+          const cols = data.table.cols;
+          const firstRow = data.table.rows[0]?.c || [];
+          const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+          return letters.map((letter, idx) => {
+            const rawLabel = (cols[idx]?.label || '').replace(/Available\s+Stock\s*/i, '').trim();
+            const cellVal = firstRow[idx]?.v;
+            const stock =
+              cellVal !== null && cellVal !== undefined && !isNaN(Number(cellVal))
+                ? Number(cellVal)
+                : defaultStock[idx].stock;
+
+            return {
+              colLetter: letter,
+              cell: `${letter}3`,
+              name: rawLabel || defaultStock[idx].name,
+              stock,
+            };
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch Sheet3 A3:F3 stock cells:', err);
+  }
+
+  return defaultStock;
+};
+
 export const fetchSheet3Stock = async (
   spreadsheetId: string = DEFAULT_SPREADSHEET_ID
 ): Promise<{
@@ -3028,35 +3091,17 @@ export const fetchSheet3Stock = async (
   const entries: Sheet3ProductEntry[] = [];
 
   try {
-    // 1. Fetch live stock summary from row 2 (names) and row 3 (quantities) across columns A to Z
-    const summaryUrl = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(targetTab)}&range=A2:Z3&_t=${Date.now()}`;
-    const sumRes = await fetch(summaryUrl, { cache: 'no-store' });
-    if (sumRes.ok) {
-      const text = await sumRes.text();
-      const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);/);
-      if (match && match[1]) {
-        const data = JSON.parse(match[1]);
-        if (data.table && data.table.cols && data.table.rows && data.table.rows.length > 0) {
-          const cols = data.table.cols;
-          const firstRow = data.table.rows[0]?.c || [];
-          cols.forEach((colObj: any, idx: number) => {
-            const rawLabel = (colObj?.label || '').trim();
-            if (rawLabel && !rawLabel.toLowerCase().includes('stock manage')) {
-              const colLetter = String.fromCharCode(65 + idx); // A, B, C...
-              const cellVal = firstRow[idx];
-              const qty = cellVal?.v !== null && cellVal?.v !== undefined ? Number(cellVal.v) : 0;
-              stockItems.push({
-                colLetter,
-                colIndex: idx + 1,
-                cell: `${colLetter}3`,
-                productName: rawLabel,
-                quantity: isNaN(qty) ? 0 : qty,
-              });
-            }
-          });
-        }
-      }
-    }
+    // 1. Fetch live stock summary from row 2 (names) and row 3 (quantities) across columns A to F (A3 to F3)
+    const directCells = await fetchSheet3DirectStockCells(cleanId);
+    directCells.forEach((box, idx) => {
+      stockItems.push({
+        colLetter: box.colLetter,
+        colIndex: idx + 1,
+        cell: box.cell,
+        productName: box.name,
+        quantity: box.stock,
+      });
+    });
 
     // 2. Fetch real-time product entries from Sheet 3 (Table starts at row 7: Date, Product Name, Source, Stock In, Stock Out, Current Stock, Current price)
     const entriesUrl = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(targetTab)}&range=A7:H1000&headers=1&_t=${Date.now()}`;

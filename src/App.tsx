@@ -38,6 +38,7 @@ import {
   appendSheetOrder,
   getSheetProducts,
   fetchSheet3Stock,
+  Sheet3StockItem,
   updateSheet3ProductStock,
   matchProductWithSheet3,
   updateSheet3Entry,
@@ -236,10 +237,18 @@ export default function App() {
   const [isSubmittingOrder, setIsSubmittingOrder] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Sheet 3 Realtime Product Entries
+  // Sheet 3 Realtime Product Entries & Stock Items
   const [sheet3Entries, setSheet3Entries] = useState<Sheet3ProductEntry[]>(() => {
     try {
       const saved = localStorage.getItem('sheet3_product_entries');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [sheet3StockItems, setSheet3StockItems] = useState<Sheet3StockItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('sheet3_stock_items');
       return saved ? JSON.parse(saved) : [];
     } catch (e) {
       return [];
@@ -432,8 +441,13 @@ export default function App() {
         });
       }
 
-      // 2. Summary Stock
+      // 2. Summary Stock (Sheet 3 A3..F3)
       if (res.stockItems && res.stockItems.length > 0) {
+        setSheet3StockItems(res.stockItems);
+        try {
+          localStorage.setItem('sheet3_stock_items', JSON.stringify(res.stockItems));
+        } catch (e) {}
+
         setProducts((prev) =>
           prev.map((p) => {
             const match = matchProductWithSheet3(p.name, res.stockItems);
@@ -1792,6 +1806,7 @@ export default function App() {
               stockLogs={stockLogs}
               onAddProduct={handleAddProduct}
               sheet3Entries={sheet3Entries}
+              sheet3StockItems={sheet3StockItems}
               onUpdateSheet3Entry={handleUpdateSheet3Entry}
               onAddSheet3Entry={handleAddSheet3Entry}
               onRefreshSheet3={() => loadSheet3StockLive(spreadsheetId)}
