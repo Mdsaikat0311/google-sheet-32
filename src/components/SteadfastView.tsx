@@ -178,13 +178,20 @@ export const isDateToday = (dateStr?: string): boolean => {
 
 /**
  * Helper to check if Column K has a valid 9-digit tracking code.
- * Steadfast courier tracking codes are 9 numeric digits (e.g. 290917655, 291304021).
- * User requirement: "colum k a 9 digid code"
+ * Steadfast courier tracking codes are 9 numeric digits (e.g. 290917655, 301648072).
+ * User requirement: "k colum a 9 digit id pay"
  */
-export const has9DigitTrackingCode = (tracking?: string | null): boolean => {
+export const has9DigitTrackingCode = (tracking?: string | number | null): boolean => {
   if (!tracking) return false;
-  const cleaned = String(tracking).trim().replace(/\D/g, '');
-  return cleaned.length === 9 || (cleaned.length >= 8 && cleaned.length <= 10);
+  let str = String(tracking).trim();
+  if (/e[+-]?\d+/i.test(str)) {
+    const num = Number(str);
+    if (!isNaN(num)) {
+      str = Math.round(num).toString();
+    }
+  }
+  const cleaned = str.replace(/\.0+$/, '').replace(/\D/g, '');
+  return cleaned.length === 9;
 };
 
 /**
@@ -192,8 +199,10 @@ export const has9DigitTrackingCode = (tracking?: string | null): boolean => {
  * User requirement: "sodo matro j colum a j golo sodo complete thakbe"
  */
 export const isColumnJComplete = (status?: string | null): boolean => {
-  if (!status) return false;
+  if (!status) return true;
   const s = String(status).toLowerCase().trim();
+  if (!s || s === '-' || s === 'n/a') return true;
+  if (s === 'cancel' || s === 'cancelled' || s === 'বাতিল') return false;
   return (
     s.includes('complete') ||
     s.includes('কমপ্লিট') ||
@@ -203,10 +212,12 @@ export const isColumnJComplete = (status?: string | null): boolean => {
 };
 
 /**
- * Helper to check if Column L has an active courier delivery status.
- * Matches user requirements: "colum l inreview, pending, cancel, partial delivery, ba approval pendig ba ,,, ashob order deluivery status"
+ * Helper to check if Column L status is specifically one of the 5 courier transfer-out statuses:
+ * in_review, pending, delivered, partial_delivered, cancelled
+ * User requirement:
+ * "l colum a in_review, pending, delivered, partial_delivered,cancelled ei 5ta status Pay"
  */
-export const hasValidCourierStatus = (courierStatus?: string | null): boolean => {
+export const isOneOfFiveCourierStatuses = (courierStatus?: string | null): boolean => {
   if (!courierStatus) return false;
   const s = String(courierStatus).toLowerCase().trim();
   if (
@@ -215,34 +226,47 @@ export const hasValidCourierStatus = (courierStatus?: string | null): boolean =>
     s === 'no_sellect' ||
     s === 'no select' ||
     s === 'no_select' ||
-    s === '-' ||
-    s === '--' ||
+    s === 'none' ||
     s === 'n/a' ||
     s === 'na' ||
+    s === '-' ||
+    s === '--' ||
     s === 'null' ||
-    s === 'undefined' ||
-    s === 'none' ||
-    s.includes('send to steadfast') ||
-    s === 'sent' ||
-    s === 'send'
+    s === 'undefined'
   ) {
     return false;
   }
-  return (
-    s.includes('inre') ||
-    s.includes('review') ||
-    s.includes('pending') ||
-    s.includes('cancel') ||
-    s.includes('partial') ||
-    s.includes('approval') ||
-    s.includes('deliver') ||
-    s.includes('transit') ||
-    s.includes('process') ||
-    s.includes('hold') ||
-    s.includes('complete') ||
-    s.includes('return') ||
-    s.length >= 3
-  );
+  const clean = s.replace(/[\s\-_]/g, '');
+
+  // 1. in_review
+  if (clean.includes('inreview') || clean.includes('inreiw') || clean.includes('review')) {
+    return true;
+  }
+  // 2. pending
+  if (clean.includes('pending')) {
+    return true;
+  }
+  // 3. delivered
+  if (clean.includes('deliver') || clean.includes('delivard') || clean.includes('delivary')) {
+    return true;
+  }
+  // 4. partial_delivered
+  if (clean.includes('partial')) {
+    return true;
+  }
+  // 5. cancelled / canceled
+  if (clean.includes('cancel')) {
+    return true;
+  }
+
+  return false;
+};
+
+/**
+ * Helper to check if Column L has an active courier delivery status.
+ */
+export const hasValidCourierStatus = (courierStatus?: string | null): boolean => {
+  return isOneOfFiveCourierStatuses(courierStatus);
 };
 
 /**
@@ -259,55 +283,63 @@ export const isInReviewCourierStatus = (courierStatus?: string | null): boolean 
  * Checks if an order has BOTH 9-digit tracking and courier status
  */
 export const hasTrackingAndStatusMatch = (order: Order): boolean => {
-  return has9DigitTrackingCode(order.trackingCode) && hasValidCourierStatus(order.courierStatus);
+  return has9DigitTrackingCode(order.trackingCode) && isOneOfFiveCourierStatuses(order.courierStatus);
 };
 
 /**
  * Checks if an order is eligible according to user instructions:
- * 1. Ready for Delivery: ONLY when Column J is strictly Complete AND Column K has NO 9-digit ID AND Column L has NO status.
- *    User requirement: "ei tab er list a jeno sodo matro j colum a j golo sodo complete thakbe and k colum and l colum a 9 digit id and status thakbe na segului sodo list a thakbe"
- * 2. Today Entry: Column K has 9-digit tracking code AND Column L has ONLY inreview ("sodo inreview thakbe")
- * 3. Excluded: Non-complete orders or orders with existing tracking/delivery status in courier.
+ * 1. Ready for Delivery:
+ *    User requirement:
+ *    "ready for delivery tab theke tranfer korer jonno ba na dekhanor jonno ,,,
+ *     k colum a 9 digit id pay and l colum a in_review, pending, delivered, partial_delivered,cancelled ei 5ta status Pay tokho jeno ei list theke sorano hoy,,
+ *     ei 2ta na rules fill na hole jeno ei list ei thake , k colum ba l colum a jai likha thakuk ei tab er list a jeno thake"
+ *
+ *    -> Transfer out / Remove from "Ready for Delivery" ONLY IF BOTH rules are fulfilled:
+ *       1. Column K has a 9-digit tracking ID
+ *       AND
+ *       2. Column L has one of the 5 statuses (in_review, pending, delivered, partial_delivered, cancelled)
+ *
+ *    -> If BOTH rules are not fulfilled together, the order STAYS in this list!
+ *
+ * 2. Today Entry: Column K has 9-digit tracking code AND Column L has in_review ("sodo inreview thakbe")
+ * 3. Excluded: Both rules fulfilled, but status in L is not in_review (e.g. pending, delivered, partial_delivered, cancelled).
  */
 export const checkSteadfastEligibility = (order: Order) => {
   const isCompleteJ = isColumnJComplete(order.status);
   const has9DigitTracking = has9DigitTrackingCode(order.trackingCode);
-  const hasCourierStatus = hasValidCourierStatus(order.courierStatus);
+  const isOneOfFiveStatuses = isOneOfFiveCourierStatuses(order.courierStatus);
   const isInReview = isInReviewCourierStatus(order.courierStatus);
 
-  // Ready for Delivery (unentered):
-  // Strictly: Column J must be 'complete' AND Column K has NO 9-digit tracking AND Column L has NO courier status
-  const isEligible = isCompleteJ && !has9DigitTracking && !hasCourierStatus;
+  // Both rules must match together to transfer out / remove from Ready for Delivery:
+  // Rule 1: Column K has a 9-digit ID
+  // Rule 2: Column L has one of the 5 statuses (in_review, pending, delivered, partial_delivered, cancelled)
+  const isTransferredOut = has9DigitTracking && isOneOfFiveStatuses;
 
-  // Today Entry: 9-digit tracking in Column K AND Column L has inreview
+  // Ready for Delivery (unentered):
+  // Unless BOTH rules are fulfilled together, the order MUST REMAIN in "Ready for Delivery"!
+  const isEligible = isCompleteJ && !isTransferredOut;
+
+  // Today Entry: 9-digit tracking in Column K AND Column L has in_review
   const isTodayEntry = has9DigitTracking && isInReview;
 
-  const isKLMatched = has9DigitTracking && hasCourierStatus;
+  const isKLMatched = isTransferredOut;
   const mStatus = String(order.steadfastStatus || '').toLowerCase().trim();
   const isSentM = mStatus.includes('send to steadfast') || mStatus.includes('sent');
 
   let excludeReason = '';
   if (isEligible) {
-    excludeReason = 'Ready for Delivery (J: Complete, K ও L ফাঁকা)';
+    excludeReason = 'Ready for Delivery (K-তে ৯-ডিজিট ও L-এ ৫ স্ট্যাটাস একসাথে নেই)';
   } else if (isTodayEntry) {
     excludeReason = `Today Entry (K: ${order.trackingCode}, L: ${order.courierStatus})`;
-  } else if (!isCompleteJ) {
-    excludeReason = `Excluded (J: ${order.status || 'Pending'} - Complete নয়)`;
-  } else if (has9DigitTracking && hasCourierStatus) {
-    excludeReason = `Excluded (K: ${order.trackingCode}, L: ${order.courierStatus})`;
-  } else if (has9DigitTracking) {
-    excludeReason = `Excluded (K: ${order.trackingCode} ট্র্যাকিং কোড আছে)`;
-  } else if (hasCourierStatus) {
-    excludeReason = `Excluded (L: ${order.courierStatus} কুরিয়ার স্ট্যাটাস আছে)`;
   } else {
-    excludeReason = 'Excluded / হিস্ট্রি';
+    excludeReason = `Excluded (K: ${order.trackingCode} ৯-ডিজিট ও L: ${order.courierStatus})`;
   }
 
   return {
     isEligible,
     isCompleteJ,
     has9DigitTracking,
-    hasCourierStatus,
+    hasCourierStatus: isOneOfFiveStatuses,
     isInReview,
     isTodayEntry,
     isKLMatched,
